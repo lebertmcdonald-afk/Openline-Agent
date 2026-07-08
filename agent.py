@@ -8,6 +8,11 @@ from strands.models.litellm import LiteLLMModel
 
 load_dotenv()
 
+# Checkpoint support: each tool appends (tool_name, "real" | "stub") here as it
+# runs, so run() can tell after the fact whether the draft it's about to show
+# was built on any placeholder data. Cleared at the start of each run().
+tool_data_log: list[tuple[str, str]] = []
+
 SYSTEM_PROMPT = """You are OpenLine, an outbound research and drafting assistant for an SDR's cold outreach.
 
 Tool sequence: When a rep adds a new prospect, call tools in this exact order: (1) get_contact_profile, (2) get_company_info, (3) get_trigger_events, (4) get_crm_history. Do not skip a tool or change the order.
@@ -44,6 +49,7 @@ def get_contact_profile(contact_id: str) -> dict:
     Returns:
         A dict with job title, tenure, and recent posts.
     """
+    tool_data_log.append(("get_contact_profile", "stub"))
     return {
         "name": contact_id,
         "title": "unavailable (stubbed tool, no real profile source connected)",
@@ -66,6 +72,7 @@ def get_company_info(company_name: str) -> dict:
     Returns:
         A dict with company size, industry, funding stage, and funding history.
     """
+    tool_data_log.append(("get_company_info", "stub"))
     return {
         "name": company_name,
         "industry": "unavailable (stubbed tool, no real firmographic source connected)",
@@ -103,6 +110,8 @@ def get_trigger_events(company_name: str) -> list[dict]:
         },
         timeout=10,
     )
+
+    tool_data_log.append(("get_trigger_events", "real"))
 
     if not response.ok:
         return []
@@ -152,6 +161,8 @@ def get_crm_history(contact_email: str) -> dict:
         timeout=10,
     )
 
+    tool_data_log.append(("get_crm_history", "real"))
+
     if not response.ok or not response.json().get("results"):
         return {
             "prior_contact": False,
@@ -179,6 +190,8 @@ def get_crm_history(contact_email: str) -> dict:
 
 
 def run():
+    tool_data_log.clear()
+
     model = LiteLLMModel(
         client_args={
             "api_key": os.environ["OPENROUTER_API_KEY"],
@@ -202,6 +215,22 @@ def run():
         "New prospect: Roberto Nachmann at AMF International Cargo Inc, "
         "email rnachmann@gmail.com. Draft a cold outreach opener."
     )
+
+    # CHECKPOINT: the agent can't send anything itself, so the highest-stakes
+    # moment is a human about to trust this draft. If any tool ran on stubbed
+    # data, that's the one moment worth interrupting for — a fully-real run
+    # should never be blocked, or the checkpoint becomes noise nobody reads.
+    stub_tools = [name for name, status in tool_data_log if status == "stub"]
+
+    if stub_tools:
+        print("CHECKPOINT — before showing this draft:")
+        print(f"  {len(stub_tools)} of {len(tool_data_log)} data sources are stubbed, not real: {', '.join(stub_tools)}")
+        print("  This draft was written without real data from those sources.")
+        answer = input("Show the draft anyway? [y/n]: ").strip().lower()
+        if answer != "y":
+            print("Draft withheld. Recommend manual research on this prospect before outreach.")
+            return
+
     print(result)
 
 
