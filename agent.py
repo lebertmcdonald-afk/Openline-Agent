@@ -220,9 +220,12 @@ def run():
     # moment is a human about to trust this draft. If any tool ran on stubbed
     # data, that's the one moment worth interrupting for — a fully-real run
     # should never be blocked, or the checkpoint becomes noise nobody reads.
+    # A SKIP result has no draft to trust in the first place, so it should
+    # never trigger the checkpoint either.
     stub_tools = [name for name, status in tool_data_log if status == "stub"]
+    is_skip = str(result).strip().startswith("SKIP")
 
-    if stub_tools:
+    if stub_tools and not is_skip:
         print("CHECKPOINT — before showing this draft:")
         print(f"  {len(stub_tools)} of {len(tool_data_log)} data sources are stubbed, not real: {', '.join(stub_tools)}")
         print("  This draft was written without real data from those sources.")
