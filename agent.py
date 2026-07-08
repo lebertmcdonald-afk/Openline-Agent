@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 
 import requests
 from dotenv import load_dotenv
@@ -24,12 +25,18 @@ Termination condition: Do not produce a DRAFT until all four tools have been cal
 
 
 # --- STUBBED TOOLS ---
-# These return mock data. get_trigger_events below is wired to a real API
-# (NewsAPI.org); the other three stay stubbed until real data sources are connected.
+# These return mock data. get_trigger_events (NewsAPI.org) and get_crm_history
+# (HubSpot) below are wired to real APIs; these two stay stubbed until real
+# LinkedIn/Crunchbase access is available.
 
 @tool
 def get_contact_profile(contact_id: str) -> dict:
     """Get role and profile info for a prospect.
+
+    STUBBED: real LinkedIn/people-data API access is paywalled/partner-only,
+    so this echoes back the queried contact_id with placeholder role data
+    instead of real profile details. Do not treat title/tenure/posts below
+    as real — flag them as unavailable rather than drafting around them.
 
     Args:
         contact_id: Identifier for the prospect (e.g. name or LinkedIn handle).
@@ -38,16 +45,20 @@ def get_contact_profile(contact_id: str) -> dict:
         A dict with job title, tenure, and recent posts.
     """
     return {
-        "name": "Jordan Reyes",
-        "title": "VP of Sales",
-        "tenure_months": 8,
-        "recent_posts": ["Excited to be scaling our outbound team this quarter."],
+        "name": contact_id,
+        "title": "unavailable (stubbed tool, no real profile source connected)",
+        "tenure_months": None,
+        "recent_posts": [],
     }
 
 
 @tool
 def get_company_info(company_name: str) -> dict:
     """Get firmographic data for a prospect's company.
+
+    STUBBED: real Crunchbase access requires a paid plan, so this returns
+    placeholder "unavailable" values rather than guessed firmographics.
+    Do not treat industry/size/funding below as real for any company.
 
     Args:
         company_name: Name of the company to look up.
@@ -57,10 +68,10 @@ def get_company_info(company_name: str) -> dict:
     """
     return {
         "name": company_name,
-        "industry": "B2B SaaS",
-        "size": "150-200 employees",
-        "funding_stage": "Series B",
-        "funding_history": [{"round": "Series B", "amount": "$28M", "date": "2026-06-15"}],
+        "industry": "unavailable (stubbed tool, no real firmographic source connected)",
+        "size": "unavailable",
+        "funding_stage": "unavailable",
+        "funding_history": [],
     }
 
 
@@ -109,19 +120,61 @@ def get_trigger_events(company_name: str) -> list[dict]:
 
 
 @tool
-def get_crm_history(contact_id: str) -> dict:
-    """Check for prior contact or CRM notes for a prospect.
+def get_crm_history(contact_email: str) -> dict:
+    """Check for prior contact or CRM notes for a prospect in HubSpot.
+
+    Calls the HubSpot Contacts Search API to look up a prospect by email.
+    Prospect must be identified by email, since that's what HubSpot search
+    keys on — do not invent an email if one wasn't provided for this prospect.
 
     Args:
-        contact_id: Identifier for the prospect.
+        contact_email: Prospect's email address to look up.
 
     Returns:
-        A dict with past touches, notes, and current deal stage.
+        A dict with prior_contact (bool), last_touch_date, days_since_last_touch
+        (int, or None if never contacted), deal_stage, and notes. Returns
+        prior_contact=False if the contact isn't found in HubSpot.
     """
+    headers = {
+        "Authorization": f"Bearer {os.environ['HUBSPOT_API_KEY']}",
+        "Content-Type": "application/json",
+    }
+
+    response = requests.post(
+        "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        headers=headers,
+        json={
+            "filterGroups": [
+                {"filters": [{"propertyName": "email", "operator": "EQ", "value": contact_email}]}
+            ],
+            "properties": ["email", "firstname", "lastname", "notes_last_updated", "hs_lead_status"],
+        },
+        timeout=10,
+    )
+
+    if not response.ok or not response.json().get("results"):
+        return {
+            "prior_contact": False,
+            "last_touch_date": None,
+            "days_since_last_touch": None,
+            "deal_stage": "not in pipeline",
+            "notes": "No CRM record found.",
+        }
+
+    props = response.json()["results"][0]["properties"]
+    last_touch_raw = props.get("notes_last_updated")
+
+    days_since_last_touch = None
+    if last_touch_raw:
+        last_touch_date = datetime.fromisoformat(last_touch_raw.replace("Z", "+00:00"))
+        days_since_last_touch = (datetime.now(timezone.utc) - last_touch_date).days
+
     return {
-        "past_touches": [],
-        "notes": "",
-        "deal_stage": "not in pipeline",
+        "prior_contact": bool(last_touch_raw),
+        "last_touch_date": last_touch_raw[:10] if last_touch_raw else None,
+        "days_since_last_touch": days_since_last_touch,
+        "deal_stage": props.get("hs_lead_status") or "unknown",
+        "notes": f"{props.get('firstname', '')} {props.get('lastname', '')}".strip(),
     }
 
 
@@ -146,8 +199,8 @@ def run():
     )
 
     result = agent(
-        "New prospect: Jordan Reyes, VP of Sales at Acme Corp. "
-        "Draft a cold outreach opener."
+        "New prospect: Roberto Nachmann at AMF International Cargo Inc, "
+        "email rnachmann@gmail.com. Draft a cold outreach opener."
     )
     print(result)
 
