@@ -13,6 +13,22 @@ load_dotenv()
 # was built on any placeholder data. Cleared at the start of each run().
 tool_data_log: list[tuple[str, str]] = []
 
+# Every run gets recorded here — prospect input, which sources were real vs
+# stubbed, and whether the output was actually shown to the rep or withheld
+# at the checkpoint. Without this, a run's only record was its terminal
+# output, gone the moment the window closed.
+LOG_PATH = "outreach_log.txt"
+
+
+def log_run(prospect_input: str, output: str, stub_tools: list[str], shown: bool) -> None:
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    with open(LOG_PATH, "a") as f:
+        f.write(f"=== {timestamp} ===\n")
+        f.write(f"Prospect input: {prospect_input}\n")
+        f.write(f"Stub data sources: {', '.join(stub_tools) if stub_tools else 'none'}\n")
+        f.write(f"Shown to rep: {shown}\n")
+        f.write(f"Output:\n{output}\n\n")
+
 SYSTEM_PROMPT = """You are OpenLine, an outbound research and drafting assistant for an SDR's cold outreach.
 
 Tool sequence: When a rep adds a new prospect, call tools in this exact order: (1) get_contact_profile, (2) get_company_info, (3) get_trigger_events, (4) get_crm_history. Do not skip a tool or change the order.
@@ -211,10 +227,11 @@ def run():
         callback_handler=None,
     )
 
-    result = agent(
+    prospect_input = (
         "New prospect: Test Pursuit at example.com, "
         "email test@example.com. Draft a cold outreach opener."
     )
+    result = agent(prospect_input)
 
     # CHECKPOINT: the agent can't send anything itself, so the highest-stakes
     # moment is a human about to trust this draft. If any tool ran on stubbed
@@ -232,9 +249,11 @@ def run():
         answer = input("Show the draft anyway? [y/n]: ").strip().lower()
         if answer != "y":
             print("Draft withheld. Recommend manual research on this prospect before outreach.")
+            log_run(prospect_input, str(result), stub_tools, shown=False)
             return
 
     print(result)
+    log_run(prospect_input, str(result), stub_tools, shown=True)
 
 
 if __name__ == "__main__":

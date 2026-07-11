@@ -2,5 +2,7 @@
 .venv/
 token.json
 credentials.json
+outreach_log.txt
 __pycache__/
 *.pyc
+.DS_Store

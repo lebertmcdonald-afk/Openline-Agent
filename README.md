@@ -73,9 +73,11 @@ HUBSPOT_API_KEY=pat-na...
 python agent.py
 ```
 
+Every run is appended to `outreach_log.txt` (timestamp, prospect input, which data sources were stubbed, whether the draft was actually shown to the rep or withheld at the checkpoint, and the full output). This file isn't committed to git — it contains real prospect data.
+
 ## Blast radius
 
 - **Scope**: one prospect per run — no batch mode exists, so a bad draft can't fan out to multiple people.
 - **Reversibility**: every tool call is read-only (search/GET requests only); nothing the agent does can modify or delete data in HubSpot or anywhere else. The HubSpot token is also scoped to read-only access.
 - **Where the real risk sits**: entirely outside the agent — a human copying the draft into their own email client and hitting send. The checkpoint above is designed for exactly that handoff moment.
-- **Known gap**: no persistent logging yet. Runs only print to stdout, so there's no audit trail of what was drafted, when, or for whom.
+- **Audit trail**: `outreach_log.txt` records every run, so there's now a local record of what was drafted, when, for whom, and whether it was shown or withheld.
