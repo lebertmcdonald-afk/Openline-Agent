@@ -212,8 +212,8 @@ def run():
     )
 
     result = agent(
-        "New prospect: Roberto Nachmann at AMF International Cargo Inc, "
-        "email rnachmann@gmail.com. Draft a cold outreach opener."
+        "New prospect: Test Pursuit at example.com, "
+        "email test@example.com. Draft a cold outreach opener."
     )
 
     # CHECKPOINT: the agent can't send anything itself, so the highest-stakes
