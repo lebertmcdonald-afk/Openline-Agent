@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 from datetime import datetime, timezone
 
 import requests
@@ -497,13 +498,27 @@ def invoke_with_fallback(prompt: str, tools: list, system_prompt: str) -> tuple[
         return result, "openrouter-fallback", model
 
 
+def get_prospect_input() -> str:
+    """Get the prospect to draft for, from a CLI argument or an interactive
+    prompt — never hardcoded. A rep has to be able to run this on whatever
+    lead they're actually working, not just the one demo prospect.
+
+    Usage: python agent.py "Jane Doe at Acme Corp, jane@acme.com"
+    """
+    if len(sys.argv) > 1:
+        return " ".join(sys.argv[1:])
+
+    console.print("[dim]No prospect passed as an argument — enter one now.[/dim]")
+    name = console.input("Prospect name: ").strip()
+    company = console.input("Company: ").strip()
+    email = console.input("Email: ").strip()
+    return f"New prospect: {name} at {company}, email {email}. Draft a cold outreach opener."
+
+
 def run():
     tool_data_log.clear()
 
-    prospect_input = (
-        "New prospect: Test Pursuit at example.com, "
-        "email test@example.com. Draft a cold outreach opener."
-    )
+    prospect_input = get_prospect_input()
     tools = [get_contact_profile, get_company_info, get_trigger_events, get_crm_history]
     result, provider_used, model = invoke_with_fallback(prospect_input, tools, SYSTEM_PROMPT)
     console.print(f"[dim]Model provider used: {provider_used}[/dim]")
@@ -545,14 +560,47 @@ def run():
 
     check_failed = self_check_result["status"] in ("FLAGGED", "UNVERIFIED")
 
-    if (incomplete_tools or placeholders_found or check_failed) and not is_skip:
+    def withhold(reason: str) -> None:
+        console.print(f"[red]{reason}[/red]")
+        log_run(
+            prospect_input, str(result), incomplete_tools, shown=False,
+            self_check_result=self_check_result, provider_used=provider_used,
+        )
+
+    def show() -> None:
+        render_draft(str(result))
+        log_run(
+            prospect_input, str(result), incomplete_tools, shown=True,
+            self_check_result=self_check_result, provider_used=provider_used,
+        )
+
+    if is_skip:
+        show()
+        return
+
+    # TIER 3 — never acceptable: an unfilled placeholder bracket isn't a
+    # judgment call for the rep to make, it's simply broken output. No
+    # prompt, no override — auto-withhold. Checked first, ahead of the
+    # other tiers, since nothing else about the run changes that verdict.
+    if placeholders_found:
+        console.print(Panel(
+            Text(
+                f"Unfilled template placeholder(s): {', '.join(placeholders_found)}\n"
+                "This is broken if sent as-is — withheld automatically, no override available.",
+                style="bold red",
+            ),
+            title="WITHHELD — broken output", border_style="red", title_align="left",
+        ))
+        withhold("Recommend re-running this prospect; do not send this draft.")
+        return
+
+    # TIER 2 — real risk: a tool failed outright, or self-check flagged an
+    # unsupported claim. This is the case a reflexive "y" habit from Tier 1
+    # is actually dangerous for, so confirming requires typing a full
+    # phrase rather than one keystroke a habituated hand can produce on
+    # autopilot.
+    if failed_tools or check_failed:
         body = Text()
-        if stub_tools:
-            body.append(
-                f"{len(stub_tools)} of {len(tool_data_log)} data sources are stubbed, not real: "
-                f"{', '.join(stub_tools)}\n",
-                style="yellow",
-            )
         if failed_tools:
             body.append(
                 f"{len(failed_tools)} of {len(tool_data_log)} data sources FAILED to respond: "
@@ -564,34 +612,47 @@ def run():
                     "get_crm_history failed — this prospect's prior-contact status is UNCONFIRMED, not clean.\n",
                     style="bold red",
                 )
-        if placeholders_found:
-            body.append(
-                f"This draft contains unfilled template placeholder(s): {', '.join(placeholders_found)}\n",
-                style="bold red",
-            )
-            body.append("These are almost certainly broken if sent as-is.\n", style="red")
         if check_failed:
             body.append(f"Self-check status: {self_check_result['status']}\n", style="bold magenta")
             for claim in self_check_result["unsupported_claims"]:
                 body.append(f"  - {claim}\n", style="magenta")
-        if incomplete_tools:
-            body.append("This draft was written without real data from those sources.\n", style="dim")
-
-        console.print(Panel(body, title="CHECKPOINT — before showing this draft", border_style="yellow", title_align="left"))
-        answer = console.input("[bold]Show the draft anyway? (y/n): [/bold]").strip().lower()
-        if answer != "y":
-            console.print("[red]Draft withheld. Recommend manual research on this prospect before outreach.[/red]")
-            log_run(
-                prospect_input, str(result), incomplete_tools, shown=False,
-                self_check_result=self_check_result, provider_used=provider_used,
+        if stub_tools:
+            body.append(
+                f"Also stubbed (not real): {', '.join(stub_tools)}\n",
+                style="yellow",
             )
+
+        risk_title = "REAL RISK — tool failure" if failed_tools else "REAL RISK — self-check flagged this draft"
+        console.print(Panel(body, title=risk_title, border_style="red", title_align="left"))
+        answer = console.input(
+            "[bold]Type 'send anyway' to override, or anything else to withhold: [/bold]"
+        ).strip().lower()
+        if answer != "send anyway":
+            withhold("Draft withheld. Recommend manual research on this prospect before outreach.")
+            return
+        show()
+        return
+
+    # TIER 1 — routine: only stubbed data, nothing else wrong. This is the
+    # expected, permanent state of today's demo (2 of 4 tools are always
+    # stubbed pending real LinkedIn/Crunchbase access), so it stays
+    # lightweight — a single y/n — but visually calm rather than alarmed,
+    # so it stops looking identical to a Tier 2 risk.
+    if stub_tools:
+        body = Text()
+        body.append(
+            f"{len(stub_tools)} of {len(tool_data_log)} data sources are stubbed, not real: "
+            f"{', '.join(stub_tools)}\n",
+            style="yellow",
+        )
+        body.append("This draft was written without real data from those sources.\n", style="dim")
+        console.print(Panel(body, title="stubbed data — routine", border_style="blue", title_align="left"))
+        answer = console.input("Show the draft anyway? (y/n): ").strip().lower()
+        if answer != "y":
+            withhold("Draft withheld. Recommend manual research on this prospect before outreach.")
             return
 
-    render_draft(str(result))
-    log_run(
-        prospect_input, str(result), incomplete_tools, shown=True,
-        self_check_result=self_check_result, provider_used=provider_used,
-    )
+    show()
 
 
 if __name__ == "__main__":
