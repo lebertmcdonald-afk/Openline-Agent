@@ -42,7 +42,9 @@ The self-check fails closed: if the verification call itself errors, times out, 
 | `get_contact_profile` | Stubbed | LinkedIn/people-data API is paywalled/partner-only |
 | `get_company_info` | Stubbed | Crunchbase API requires a paid plan |
 
-Stubbed tools return honest placeholder values (e.g. `"unavailable (stubbed tool, no real profile source connected)"`) rather than guessed data, so the model treats them as missing information instead of real signal. Both real tools are wrapped in error handling: a network failure is logged as `"failed"`, distinct from a tool that ran successfully and genuinely found nothing — those are different facts, and a failed CRM check is never treated as equivalent to "no prior contact found."
+This is a deliberate design choice, not a placeholder for missing features: stubbed tools return honest values like `"unavailable (stubbed tool, no real profile source connected)"` rather than a guess. The alternative — quietly inventing a plausible-sounding title or company size — would be worse than admitting the gap, since a fabricated detail can actively mislead a rep, while "unavailable" just means the model has less to work with. The model is told to treat these values as missing information, never as real signal to draft around.
+
+Both real tools are wrapped in error handling: a network failure is logged as `"failed"`, distinct from a tool that ran successfully and genuinely found nothing — those are different facts, and a failed CRM check is never treated as equivalent to "no prior contact found."
 
 ## Human checkpoint
 
